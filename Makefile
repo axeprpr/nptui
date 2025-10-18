@@ -1,5 +1,6 @@
 BINARY_NAME=nptui
-VERSION=1.0.0
+GIT_COMMITS := $(shell git rev-list --count HEAD 2>/dev/null || echo "0")
+VERSION=1.0.$(GIT_COMMITS)
 BUILD_DIR=build
 PACKAGE_DIR=package
 

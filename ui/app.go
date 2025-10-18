@@ -192,32 +192,45 @@ func (a *App) showInterfaceEdit(iface string) {
 		dnsField.SetDisabled(true)
 	}
 
-	// Add dropdown first, then input fields
-	form.AddDropDown("Configuration", []string{"DHCP", "Static"}, 
-		map[string]int{"dhcp": 0, "static": 1}[configMethod], 
-		func(option string, optionIndex int) {
-			configMethod = []string{"dhcp", "static"}[optionIndex]
-			// Enable/disable static fields based on selection
-			// DropDown is at index 0, input fields are at 1, 2, 3
-			if form.GetFormItemCount() > 3 {
-				if configMethod == "dhcp" {
-					form.GetFormItem(1).(*tview.InputField).SetDisabled(true)
-					form.GetFormItem(2).(*tview.InputField).SetDisabled(true)
-					form.GetFormItem(3).(*tview.InputField).SetDisabled(true)
-				} else {
-					form.GetFormItem(1).(*tview.InputField).SetDisabled(false)
-					form.GetFormItem(2).(*tview.InputField).SetDisabled(false)
-					form.GetFormItem(3).(*tview.InputField).SetDisabled(false)
-				}
-			}
-		})
+	// Create a toggle field for DHCP/Static selection (better than dropdown)
+	configField := tview.NewInputField().
+		SetLabel("Configuration").
+		SetText(map[string]string{"dhcp": "DHCP", "static": "Static"}[configMethod]).
+		SetFieldWidth(20).
+		SetFieldBackgroundColor(tcell.ColorBlue).
+		SetFieldTextColor(tcell.ColorWhite).
+		SetLabelColor(tcell.ColorYellow)
 	
-	// Configure dropdown colors
-	if dd := form.GetFormItem(0).(*tview.DropDown); dd != nil {
-		dd.SetFieldBackgroundColor(tcell.ColorBlue).
-			SetFieldTextColor(tcell.ColorWhite).
-			SetLabelColor(tcell.ColorYellow)
-	}
+	// Make it read-only but toggleable
+	configField.SetAcceptanceFunc(func(textToCheck string, lastChar rune) bool {
+		return false // Don't accept any input
+	})
+	
+	// Toggle on Space or Enter
+	configField.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEnter || event.Rune() == ' ' {
+			// Toggle between DHCP and Static
+			if configMethod == "dhcp" {
+				configMethod = "static"
+				configField.SetText("Static")
+				// Enable static fields
+				ipField.SetDisabled(false)
+				gwField.SetDisabled(false)
+				dnsField.SetDisabled(false)
+			} else {
+				configMethod = "dhcp"
+				configField.SetText("DHCP")
+				// Disable static fields
+				ipField.SetDisabled(true)
+				gwField.SetDisabled(true)
+				dnsField.SetDisabled(true)
+			}
+			return nil
+		}
+		return event
+	})
+	
+	form.AddFormItem(configField)
 	
 	// Set field colors
 	ipField.SetFieldBackgroundColor(tcell.ColorBlue).
@@ -283,20 +296,18 @@ func (a *App) showInterfaceEdit(iface string) {
 		a.showInterfaceList()
 	})
 
+	// Add Esc handler at Flex level to avoid interfering with form navigation
 	flex := tview.NewFlex().
 		SetDirection(tview.FlexRow).
 		AddItem(form, 0, 1, true).
-		AddItem(a.createFooter("Tab/↓: Next | ↑: Prev | Enter: Edit/Select | Esc: Back"), 1, 0, false)
-
-	// Custom input handler for better form navigation
-	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		switch event.Key() {
-		case tcell.KeyEscape:
-			// Exit form
+		AddItem(a.createFooter("Tab: Navigate | Space/Enter: Toggle | Esc: Back"), 1, 0, false)
+	
+	// Set input capture on flex instead of form for better compatibility
+	flex.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
 			a.showInterfaceList()
 			return nil
 		}
-		
 		return event
 	})
 
