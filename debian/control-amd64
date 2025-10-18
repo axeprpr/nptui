@@ -1,0 +1,17 @@
+Package: nptui
+Version: 1.0.0
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: NPTUI Developer <dev@example.com>
+Description: Netplan TUI - Terminal User Interface for Netplan
+ A terminal-based user interface for managing network configuration
+ using netplan. Similar to nmtui but designed specifically for netplan.
+ .
+ Features:
+  - Configure network interfaces
+  - Set IP addresses (DHCP or Static)
+  - Configure DNS servers
+  - Manage network settings easily
+Depends: netplan.io
+

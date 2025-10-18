@@ -1,0 +1,23 @@
+#!/bin/sh
+set -e
+
+case "$1" in
+    configure)
+        # Ensure netplan directory exists
+        mkdir -p /etc/netplan
+        
+        echo "nptui has been installed successfully!"
+        echo "Run 'sudo nptui' to configure your network interfaces."
+    ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+    ;;
+
+    *)
+        echo "postinst called with unknown argument \`$1'" >&2
+        exit 1
+    ;;
+esac
+
+exit 0
+
