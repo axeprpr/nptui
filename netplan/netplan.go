@@ -32,8 +32,14 @@ type EthernetConfig struct {
 	Addresses   []string `yaml:"addresses,omitempty"`
 	Gateway4    string   `yaml:"gateway4,omitempty"`
 	Gateway6    string   `yaml:"gateway6,omitempty"`
+	Routes      []Route  `yaml:"routes,omitempty"`
 	Nameservers *DNS     `yaml:"nameservers,omitempty"`
 	Optional    bool     `yaml:"optional,omitempty"`
+}
+
+type Route struct {
+	To  string `yaml:"to"`
+	Via string `yaml:"via"`
 }
 
 type DNS struct {
@@ -148,6 +154,42 @@ func (c *NetworkConfig) SetInterfaceConfig(iface string, config EthernetConfig) 
 	c.Network.Ethernets[iface] = config
 }
 
+// GetGateway returns the gateway from either gateway4 or routes
+func (ec *EthernetConfig) GetGateway() string {
+	// Try old format first
+	if ec.Gateway4 != "" {
+		return ec.Gateway4
+	}
+	
+	// Try new routes format
+	for _, route := range ec.Routes {
+		if route.To == "default" {
+			return route.Via
+		}
+	}
+	
+	return ""
+}
+
+// SetGateway sets the gateway using the new routes format
+func (ec *EthernetConfig) SetGateway(gateway string) {
+	if gateway == "" {
+		ec.Routes = nil
+		ec.Gateway4 = ""
+		return
+	}
+	
+	// Use new routes format
+	ec.Routes = []Route{
+		{
+			To:  "default",
+			Via: gateway,
+		},
+	}
+	// Clear old format
+	ec.Gateway4 = ""
+}
+
 // FormatConfig returns a human-readable string of the config
 func (ec *EthernetConfig) FormatConfig() string {
 	if ec.DHCP4 {
@@ -156,9 +198,12 @@ func (ec *EthernetConfig) FormatConfig() string {
 	
 	if len(ec.Addresses) > 0 {
 		config := fmt.Sprintf("Static: %s", ec.Addresses[0])
-		if ec.Gateway4 != "" {
-			config += fmt.Sprintf("  Gateway: %s", ec.Gateway4)
+		
+		gateway := ec.GetGateway()
+		if gateway != "" {
+			config += fmt.Sprintf("  Gateway: %s", gateway)
 		}
+		
 		if ec.Nameservers != nil && len(ec.Nameservers.Addresses) > 0 {
 			config += fmt.Sprintf("  DNS: %v", ec.Nameservers.Addresses)
 		}

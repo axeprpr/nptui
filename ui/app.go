@@ -3,372 +3,468 @@ package ui
 import (
 	"fmt"
 	"nptui/netplan"
+	"strings"
 
-	"github.com/gdamore/tcell/v2"
-	"github.com/rivo/tview"
+	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
+
+// Styles
+var (
+	titleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("11")). // Yellow
+			MarginBottom(1)
+
+	selectedStyle = lipgloss.NewStyle().
+			Background(lipgloss.Color("10")). // Green
+			Foreground(lipgloss.Color("0")).  // Black
+			Bold(true)
+
+	normalStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")) // White
+
+	labelStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("11")). // Yellow
+			Bold(true)
+
+	inputStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")). // White
+			Background(lipgloss.Color("4"))   // Blue
+
+	disabledStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("8")) // Gray
+
+	helpStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("15")). // White
+			Background(lipgloss.Color("4")).  // Blue
+			Padding(0, 1)
+)
+
+type screen int
+
+const (
+	mainMenuScreen screen = iota
+	interfaceListScreen
+	interfaceEditScreen
+)
+
+type model struct {
+	screen      screen
+	cursor      int
+	config      *netplan.NetworkConfig
+	interfaces  []string
+	selectedIf  string
+	configMode  string // "dhcp" or "static"
+	ipAddress   string
+	gateway     string
+	dns         string
+	editField   int // 0=config, 1=ip, 2=gateway, 3=dns
+	message     string
+	err         error
+}
+
+func initialModel() model {
+	config, err := netplan.LoadConfig()
+	if err != nil {
+		return model{err: err}
+	}
+
+	return model{
+		screen: mainMenuScreen,
+		cursor: 0,
+		config: config,
+	}
+}
+
+func (m model) Init() tea.Cmd {
+	return nil
+}
+
+func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch m.screen {
+		case mainMenuScreen:
+			return m.updateMainMenu(msg)
+		case interfaceListScreen:
+			return m.updateInterfaceList(msg)
+		case interfaceEditScreen:
+			return m.updateInterfaceEdit(msg)
+		}
+
+	case tea.WindowSizeMsg:
+		return m, nil
+	}
+
+	return m, nil
+}
+
+func (m model) updateMainMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c", "q":
+		return m, tea.Quit
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < 2 {
+			m.cursor++
+		}
+	case "enter", " ":
+		switch m.cursor {
+		case 0: // Edit Network Interfaces
+			interfaces, err := netplan.GetInterfaces()
+			if err != nil {
+				m.err = err
+				return m, nil
+			}
+			m.interfaces = interfaces
+			m.screen = interfaceListScreen
+			m.cursor = 0
+		case 1: // Apply Configuration
+			if err := netplan.ApplyConfig(); err != nil {
+				m.message = fmt.Sprintf("Error: %v", err)
+			} else {
+				m.message = "Configuration applied successfully!"
+			}
+		case 2: // Quit
+			return m, tea.Quit
+		}
+	}
+	return m, nil
+}
+
+func (m model) updateInterfaceList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q", "b":
+		m.screen = mainMenuScreen
+		m.cursor = 0
+		m.message = ""
+	case "up", "k":
+		if m.cursor > 0 {
+			m.cursor--
+		}
+	case "down", "j":
+		if m.cursor < len(m.interfaces) {
+			m.cursor++
+		}
+	case "enter", " ":
+		if m.cursor < len(m.interfaces) {
+			m.selectedIf = m.interfaces[m.cursor]
+			cfg := m.config.GetInterfaceConfig(m.selectedIf)
+
+			// Initialize edit fields
+			if cfg.DHCP4 {
+				m.configMode = "dhcp"
+			} else {
+				m.configMode = "static"
+			}
+
+			m.ipAddress = ""
+			if len(cfg.Addresses) > 0 {
+				m.ipAddress = cfg.Addresses[0]
+			}
+
+			m.gateway = cfg.GetGateway()
+
+			m.dns = ""
+			if cfg.Nameservers != nil && len(cfg.Nameservers.Addresses) > 0 {
+				m.dns = cfg.Nameservers.Addresses[0]
+			}
+
+			m.screen = interfaceEditScreen
+			m.editField = 0
+			m.message = ""
+		} else {
+			// Back option
+			m.screen = mainMenuScreen
+			m.cursor = 0
+		}
+	}
+	return m, nil
+}
+
+func (m model) updateInterfaceEdit(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.screen = interfaceListScreen
+		m.cursor = 0
+		m.message = ""
+		return m, nil
+	case "up", "k":
+		if m.editField > 0 {
+			m.editField--
+		}
+	case "down", "j":
+		maxField := 3
+		if m.configMode == "dhcp" {
+			maxField = 0
+		}
+		if m.editField < maxField {
+			m.editField++
+		}
+	case "tab":
+		maxField := 3
+		if m.configMode == "dhcp" {
+			maxField = 0
+		}
+		m.editField = (m.editField + 1) % (maxField + 1)
+	case "enter", " ":
+		if m.editField == 0 {
+			// Toggle DHCP/Static
+			if m.configMode == "dhcp" {
+				m.configMode = "static"
+			} else {
+				m.configMode = "dhcp"
+			}
+		}
+	case "ctrl+s":
+		// Save configuration
+		return m.saveConfig(), nil
+	case "backspace":
+		if m.editField > 0 && m.configMode == "static" {
+			switch m.editField {
+			case 1:
+				if len(m.ipAddress) > 0 {
+					m.ipAddress = m.ipAddress[:len(m.ipAddress)-1]
+				}
+			case 2:
+				if len(m.gateway) > 0 {
+					m.gateway = m.gateway[:len(m.gateway)-1]
+				}
+			case 3:
+				if len(m.dns) > 0 {
+					m.dns = m.dns[:len(m.dns)-1]
+				}
+			}
+		}
+	default:
+		// Handle text input
+		if m.editField > 0 && m.configMode == "static" {
+			if len(msg.String()) == 1 {
+				char := msg.String()
+				switch m.editField {
+				case 1:
+					m.ipAddress += char
+				case 2:
+					m.gateway += char
+				case 3:
+					m.dns += char
+				}
+			}
+		}
+	}
+	return m, nil
+}
+
+func (m model) saveConfig() tea.Model {
+	newConfig := netplan.EthernetConfig{}
+
+	if m.configMode == "dhcp" {
+		newConfig.DHCP4 = true
+	} else {
+		newConfig.DHCP4 = false
+		if m.ipAddress != "" {
+			newConfig.Addresses = []string{m.ipAddress}
+		}
+		if m.gateway != "" {
+			newConfig.SetGateway(m.gateway)
+		}
+		if m.dns != "" {
+			newConfig.Nameservers = &netplan.DNS{
+				Addresses: []string{m.dns},
+			}
+		}
+	}
+
+	m.config.SetInterfaceConfig(m.selectedIf, newConfig)
+
+	if err := netplan.SaveConfig(m.config); err != nil {
+		m.message = fmt.Sprintf("Error: %v", err)
+	} else {
+		m.message = "Configuration saved! Press Ctrl+S to apply or Esc to go back."
+	}
+
+	return m
+}
+
+func (m model) View() string {
+	if m.err != nil {
+		return fmt.Sprintf("Error: %v\n\nPress Ctrl+C to exit.\n", m.err)
+	}
+
+	switch m.screen {
+	case mainMenuScreen:
+		return m.viewMainMenu()
+	case interfaceListScreen:
+		return m.viewInterfaceList()
+	case interfaceEditScreen:
+		return m.viewInterfaceEdit()
+	}
+
+	return ""
+}
+
+func (m model) viewMainMenu() string {
+	var s strings.Builder
+
+	s.WriteString(titleStyle.Render("Netplan TUI - Main Menu"))
+	s.WriteString("\n\n")
+
+	choices := []string{
+		"Edit Network Interfaces",
+		"Apply Configuration",
+		"Quit",
+	}
+
+	for i, choice := range choices {
+		cursor := " "
+		if m.cursor == i {
+			cursor = ">"
+			s.WriteString(selectedStyle.Render(cursor + " " + choice))
+		} else {
+			s.WriteString(normalStyle.Render(cursor + " " + choice))
+		}
+		s.WriteString("\n")
+	}
+
+	if m.message != "" {
+		s.WriteString("\n" + labelStyle.Render(m.message) + "\n")
+	}
+
+	s.WriteString("\n")
+	s.WriteString(helpStyle.Render(" ↑↓: Navigate | Enter: Select | q: Quit "))
+	s.WriteString("\n")
+
+	return s.String()
+}
+
+func (m model) viewInterfaceList() string {
+	var s strings.Builder
+
+	s.WriteString(titleStyle.Render("Network Interfaces"))
+	s.WriteString("\n\n")
+
+	for i, iface := range m.interfaces {
+		cfg := m.config.GetInterfaceConfig(iface)
+		status := cfg.FormatConfig()
+
+		cursor := " "
+		if m.cursor == i {
+			cursor = ">"
+			s.WriteString(selectedStyle.Render(fmt.Sprintf("%s %s", cursor, iface)))
+			s.WriteString("\n  " + normalStyle.Render(status) + "\n")
+		} else {
+			s.WriteString(normalStyle.Render(fmt.Sprintf("%s %s", cursor, iface)))
+			s.WriteString("\n  " + disabledStyle.Render(status) + "\n")
+		}
+		s.WriteString("\n")
+	}
+
+	cursor := " "
+	if m.cursor == len(m.interfaces) {
+		cursor = ">"
+		s.WriteString(selectedStyle.Render(cursor + " Back"))
+	} else {
+		s.WriteString(normalStyle.Render(cursor + " Back"))
+	}
+	s.WriteString("\n\n")
+
+	s.WriteString(helpStyle.Render(" ↑↓: Navigate | Enter: Select | Esc: Back "))
+	s.WriteString("\n")
+
+	return s.String()
+}
+
+func (m model) viewInterfaceEdit() string {
+	var s strings.Builder
+
+	s.WriteString(titleStyle.Render(fmt.Sprintf("Configure Interface: %s", m.selectedIf)))
+	s.WriteString("\n\n")
+
+	// Configuration mode
+	cursor := " "
+	if m.editField == 0 {
+		cursor = ">"
+	}
+	configValue := "DHCP"
+	if m.configMode == "static" {
+		configValue = "Static"
+	}
+
+	if m.editField == 0 {
+		s.WriteString(labelStyle.Render(cursor+" Configuration: ") + inputStyle.Render(" "+configValue+" "))
+	} else {
+		s.WriteString(labelStyle.Render(cursor+" Configuration: ") + normalStyle.Render(configValue))
+	}
+	s.WriteString("\n\n")
+
+	if m.configMode == "static" {
+		// IP Address
+		cursor = " "
+		if m.editField == 1 {
+			cursor = ">"
+		}
+		if m.editField == 1 {
+			s.WriteString(labelStyle.Render(cursor+" IP Address/CIDR: ") + inputStyle.Render(" "+m.ipAddress+" "))
+		} else {
+			s.WriteString(labelStyle.Render(cursor+" IP Address/CIDR: ") + normalStyle.Render(m.ipAddress))
+		}
+		s.WriteString("\n\n")
+
+		// Gateway
+		cursor = " "
+		if m.editField == 2 {
+			cursor = ">"
+		}
+		if m.editField == 2 {
+			s.WriteString(labelStyle.Render(cursor+" Gateway: ") + inputStyle.Render(" "+m.gateway+" "))
+		} else {
+			s.WriteString(labelStyle.Render(cursor+" Gateway: ") + normalStyle.Render(m.gateway))
+		}
+		s.WriteString("\n\n")
+
+		// DNS
+		cursor = " "
+		if m.editField == 3 {
+			cursor = ">"
+		}
+		if m.editField == 3 {
+			s.WriteString(labelStyle.Render(cursor+" DNS Server: ") + inputStyle.Render(" "+m.dns+" "))
+		} else {
+			s.WriteString(labelStyle.Render(cursor+" DNS Server: ") + normalStyle.Render(m.dns))
+		}
+		s.WriteString("\n\n")
+	}
+
+	if m.message != "" {
+		s.WriteString(labelStyle.Render(m.message) + "\n\n")
+	}
+
+	s.WriteString(helpStyle.Render(" ↑↓: Navigate | Space: Toggle | Type to edit | Ctrl+S: Save | Esc: Back "))
+	s.WriteString("\n")
+
+	return s.String()
+}
 
 // App represents the main application
 type App struct {
-	app    *tview.Application
-	pages  *tview.Pages
-	config *netplan.NetworkConfig
 }
 
 // NewApp creates a new application
 func NewApp() *App {
-	app := tview.NewApplication()
-	
-	// Set better color scheme
-	tview.Styles.PrimitiveBackgroundColor = tcell.ColorDefault
-	tview.Styles.ContrastBackgroundColor = tcell.ColorBlue
-	tview.Styles.MoreContrastBackgroundColor = tcell.ColorGreen
-	tview.Styles.BorderColor = tcell.ColorGreen
-	tview.Styles.TitleColor = tcell.ColorYellow
-	tview.Styles.GraphicsColor = tcell.ColorGreen
-	tview.Styles.PrimaryTextColor = tcell.ColorWhite
-	tview.Styles.SecondaryTextColor = tcell.ColorYellow
-	tview.Styles.TertiaryTextColor = tcell.ColorGreen
-	tview.Styles.InverseTextColor = tcell.ColorBlack
-	tview.Styles.ContrastSecondaryTextColor = tcell.ColorWhite
-	
-	return &App{
-		app:   app,
-		pages: tview.NewPages(),
-	}
+	return &App{}
 }
 
 // Run starts the application
 func (a *App) Run() error {
-	// Load config
-	config, err := netplan.LoadConfig()
-	if err != nil {
-		return fmt.Errorf("failed to load netplan config: %v", err)
-	}
-	a.config = config
-
-	// Show main menu
-	a.showMainMenu()
-
-	// Set root and run
-	a.app.SetRoot(a.pages, true)
-	return a.app.Run()
+	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
+	_, err := p.Run()
+	return err
 }
-
-// showMainMenu displays the main menu
-func (a *App) showMainMenu() {
-	menu := tview.NewList()
-	menu.SetBorder(true)
-	menu.SetTitle(" Netplan TUI - Main Menu ")
-	menu.SetTitleAlign(tview.AlignCenter)
-	
-	// Set list colors for better visibility
-	menu.SetMainTextColor(tcell.ColorWhite)
-	menu.SetSecondaryTextColor(tcell.ColorYellow)
-	menu.SetSelectedTextColor(tcell.ColorBlack)
-	menu.SetSelectedBackgroundColor(tcell.ColorGreen)
-	menu.SetShortcutColor(tcell.ColorDarkCyan)
-
-	menu.AddItem("Edit Network Interfaces", "Configure network adapters", '1', func() {
-		a.showInterfaceList()
-	})
-	menu.AddItem("Apply Configuration", "Apply netplan changes", '2', func() {
-		a.applyConfig()
-	})
-	menu.AddItem("Quit", "Exit the program", 'q', func() {
-		a.app.Stop()
-	})
-
-	menu.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		// Items are already handled by their callback
-	})
-
-	// Add footer with help text
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(menu, 0, 1, true).
-		AddItem(a.createFooter("↑↓: Navigate | Enter: Select | q: Quit"), 1, 0, false)
-
-	a.pages.AddPage("main", flex, true, true)
-}
-
-// showInterfaceList shows the list of network interfaces
-func (a *App) showInterfaceList() {
-	list := tview.NewList()
-	list.SetBorder(true)
-	list.SetTitle(" Network Interfaces ")
-	list.SetTitleAlign(tview.AlignCenter)
-	
-	// Set list colors for better visibility
-	list.SetMainTextColor(tcell.ColorWhite)
-	list.SetSecondaryTextColor(tcell.ColorYellow)
-	list.SetSelectedTextColor(tcell.ColorBlack)
-	list.SetSelectedBackgroundColor(tcell.ColorGreen)
-	list.SetShortcutColor(tcell.ColorDarkCyan)
-
-	// Get available interfaces
-	interfaces, err := netplan.GetInterfaces()
-	if err != nil {
-		a.showError(fmt.Sprintf("Failed to get interfaces: %v", err))
-		return
-	}
-
-	// Add interfaces to list
-	for _, iface := range interfaces {
-		config := a.config.GetInterfaceConfig(iface)
-		secondary := config.FormatConfig()
-		
-		// Capture variable in closure
-		ifaceName := iface
-		list.AddItem(ifaceName, secondary, 0, func() {
-			a.showInterfaceEdit(ifaceName)
-		})
-	}
-
-	list.AddItem("Back", "Return to main menu", 'b', func() {
-		a.pages.SwitchToPage("main")
-	})
-
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(list, 0, 1, true).
-		AddItem(a.createFooter("↑↓: Navigate | Enter: Edit | b: Back"), 1, 0, false)
-
-	a.pages.AddPage("interfaces", flex, true, true)
-}
-
-// showInterfaceEdit shows the interface edit form
-func (a *App) showInterfaceEdit(iface string) {
-	config := a.config.GetInterfaceConfig(iface)
-	
-	form := tview.NewForm()
-	form.SetBorder(true)
-	form.SetTitle(fmt.Sprintf(" Configure Interface: %s ", iface))
-	form.SetTitleAlign(tview.AlignCenter)
-
-	// Configuration method
-	configMethod := "dhcp"
-	if !config.DHCP4 && len(config.Addresses) > 0 {
-		configMethod = "static"
-	}
-
-	// Form fields
-	ipAddress := ""
-	gateway := ""
-	dns := ""
-	
-	if len(config.Addresses) > 0 {
-		ipAddress = config.Addresses[0]
-	}
-	if config.Gateway4 != "" {
-		gateway = config.Gateway4
-	}
-	if config.Nameservers != nil && len(config.Nameservers.Addresses) > 0 {
-		dns = config.Nameservers.Addresses[0]
-	}
-
-	// Create input fields first
-	ipField := tview.NewInputField().
-		SetLabel("IP Address/CIDR").
-		SetText(ipAddress).
-		SetFieldWidth(30)
-	if configMethod == "dhcp" {
-		ipField.SetDisabled(true)
-	}
-	
-	gwField := tview.NewInputField().
-		SetLabel("Gateway").
-		SetText(gateway).
-		SetFieldWidth(30)
-	if configMethod == "dhcp" {
-		gwField.SetDisabled(true)
-	}
-	
-	dnsField := tview.NewInputField().
-		SetLabel("DNS Server").
-		SetText(dns).
-		SetFieldWidth(30)
-	if configMethod == "dhcp" {
-		dnsField.SetDisabled(true)
-	}
-
-	// Create a toggle field for DHCP/Static selection (better than dropdown)
-	configField := tview.NewInputField().
-		SetLabel("Configuration").
-		SetText(map[string]string{"dhcp": "DHCP", "static": "Static"}[configMethod]).
-		SetFieldWidth(20).
-		SetFieldBackgroundColor(tcell.ColorBlue).
-		SetFieldTextColor(tcell.ColorWhite).
-		SetLabelColor(tcell.ColorYellow)
-	
-	// Make it read-only but toggleable
-	configField.SetAcceptanceFunc(func(textToCheck string, lastChar rune) bool {
-		return false // Don't accept any input
-	})
-	
-	// Toggle on Space or Enter
-	configField.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEnter || event.Rune() == ' ' {
-			// Toggle between DHCP and Static
-			if configMethod == "dhcp" {
-				configMethod = "static"
-				configField.SetText("Static")
-				// Enable static fields
-				ipField.SetDisabled(false)
-				gwField.SetDisabled(false)
-				dnsField.SetDisabled(false)
-			} else {
-				configMethod = "dhcp"
-				configField.SetText("DHCP")
-				// Disable static fields
-				ipField.SetDisabled(true)
-				gwField.SetDisabled(true)
-				dnsField.SetDisabled(true)
-			}
-			return nil
-		}
-		return event
-	})
-	
-	form.AddFormItem(configField)
-	
-	// Set field colors
-	ipField.SetFieldBackgroundColor(tcell.ColorBlue).
-		SetFieldTextColor(tcell.ColorWhite).
-		SetLabelColor(tcell.ColorYellow)
-	gwField.SetFieldBackgroundColor(tcell.ColorBlue).
-		SetFieldTextColor(tcell.ColorWhite).
-		SetLabelColor(tcell.ColorYellow)
-	dnsField.SetFieldBackgroundColor(tcell.ColorBlue).
-		SetFieldTextColor(tcell.ColorWhite).
-		SetLabelColor(tcell.ColorYellow)
-	
-	form.AddFormItem(ipField)
-	form.AddFormItem(gwField)
-	form.AddFormItem(dnsField)
-
-	// Set form button style
-	form.SetButtonsAlign(tview.AlignCenter)
-	form.SetButtonBackgroundColor(tcell.ColorBlue)
-	form.SetButtonTextColor(tcell.ColorWhite)
-	form.SetButtonActivatedStyle(tcell.StyleDefault.
-		Background(tcell.ColorGreen).
-		Foreground(tcell.ColorBlack))
-	
-	form.AddButton("Save", func() {
-		newConfig := netplan.EthernetConfig{}
-		
-		if configMethod == "dhcp" {
-			newConfig.DHCP4 = true
-		} else {
-			newConfig.DHCP4 = false
-			
-			ip := ipField.GetText()
-			if ip != "" {
-				newConfig.Addresses = []string{ip}
-			}
-			
-			gw := gwField.GetText()
-			if gw != "" {
-				newConfig.Gateway4 = gw
-			}
-			
-			dnsText := dnsField.GetText()
-			if dnsText != "" {
-				newConfig.Nameservers = &netplan.DNS{
-					Addresses: []string{dnsText},
-				}
-			}
-		}
-		
-		a.config.SetInterfaceConfig(iface, newConfig)
-		
-		if err := netplan.SaveConfig(a.config); err != nil {
-			a.showError(fmt.Sprintf("Failed to save config: %v", err))
-			return
-		}
-		
-		a.showInfo("Configuration saved! Use 'Apply Configuration' to activate.")
-		a.showInterfaceList()
-	})
-
-	form.AddButton("Cancel", func() {
-		a.showInterfaceList()
-	})
-
-	// Add Esc handler at Flex level to avoid interfering with form navigation
-	flex := tview.NewFlex().
-		SetDirection(tview.FlexRow).
-		AddItem(form, 0, 1, true).
-		AddItem(a.createFooter("Tab: Navigate | Space/Enter: Toggle | Esc: Back"), 1, 0, false)
-	
-	// Set input capture on flex instead of form for better compatibility
-	flex.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Key() == tcell.KeyEscape {
-			a.showInterfaceList()
-			return nil
-		}
-		return event
-	})
-
-	a.pages.AddPage("edit", flex, true, true)
-}
-
-// applyConfig applies the netplan configuration
-func (a *App) applyConfig() {
-	modal := tview.NewModal().
-		SetText("Apply netplan configuration?\nThis will activate the network changes.").
-		AddButtons([]string{"Apply", "Cancel"}).
-		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			if buttonLabel == "Apply" {
-				if err := netplan.ApplyConfig(); err != nil {
-					a.showError(fmt.Sprintf("Failed to apply configuration: %v", err))
-				} else {
-					a.showInfo("Configuration applied successfully!\nNetwork changes are now active.")
-				}
-			} else {
-				a.pages.SwitchToPage("main")
-			}
-		})
-
-	a.pages.AddPage("apply", modal, true, true)
-}
-
-// showError shows an error dialog
-func (a *App) showError(message string) {
-	modal := tview.NewModal().
-		SetText(message).
-		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			a.pages.SwitchToPage("main")
-		})
-
-	modal.SetBackgroundColor(tcell.ColorRed)
-	modal.SetTextColor(tcell.ColorWhite)
-	
-	a.pages.AddPage("error", modal, true, true)
-}
-
-// showInfo shows an info dialog
-func (a *App) showInfo(message string) {
-	modal := tview.NewModal().
-		SetText(message).
-		AddButtons([]string{"OK"}).
-		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			a.pages.RemovePage("info")
-		})
-
-	a.pages.AddPage("info", modal, true, true)
-}
-
-// createFooter creates a footer with help text
-func (a *App) createFooter(text string) *tview.TextView {
-	footer := tview.NewTextView().
-		SetText(text).
-		SetTextAlign(tview.AlignCenter).
-		SetDynamicColors(true)
-	footer.SetBackgroundColor(tcell.ColorDarkBlue)
-	footer.SetTextColor(tcell.ColorWhite)
-	return footer
-}
-
