@@ -54,7 +54,7 @@ deb-amd64: build-amd64
 	@cp $(BUILD_DIR)/$(BINARY_NAME)-amd64 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-amd64/usr/bin/$(BINARY_NAME)
 	@chmod 755 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-amd64/usr/bin/$(BINARY_NAME)
 	
-	@cp debian/control-amd64 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-amd64/DEBIAN/control
+	@sed 's/Version:.*/Version: $(VERSION)/' debian/control-amd64 > $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-amd64/DEBIAN/control
 	@cp debian/postinst $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-amd64/DEBIAN/postinst
 	@cp debian/postrm $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-amd64/DEBIAN/postrm
 	@chmod 755 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-amd64/DEBIAN/postinst
@@ -77,7 +77,7 @@ deb-arm64: build-arm64
 	@cp $(BUILD_DIR)/$(BINARY_NAME)-arm64 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-arm64/usr/bin/$(BINARY_NAME)
 	@chmod 755 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-arm64/usr/bin/$(BINARY_NAME)
 	
-	@cp debian/control-arm64 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-arm64/DEBIAN/control
+	@sed 's/Version:.*/Version: $(VERSION)/' debian/control-arm64 > $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-arm64/DEBIAN/control
 	@cp debian/postinst $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-arm64/DEBIAN/postinst
 	@cp debian/postrm $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-arm64/DEBIAN/postrm
 	@chmod 755 $(PACKAGE_DIR)/$(BINARY_NAME)-$(VERSION)-arm64/DEBIAN/postinst
